@@ -1,0 +1,19 @@
+{
+  "name": "MARL Edge Cache",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "wokwi.wokwi-vscode",
+        "platformio.platformio-ide",
+        "ms-azuretools.vscode-docker",
+        "ms-python.python"
+      ]
+    }
+  },
+  "forwardPorts": [1883],
+  "postCreateCommand": "pip install -r control-plane/requirements.txt"
+}
