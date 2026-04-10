@@ -1,6 +1,5 @@
 # Use CPU-only wheels to keep Docker builds reasonable.
---index-url https://download.pytorch.org/whl/cpu
-torch==2.2.2
+torch>=2.0.0
 
 # Fall back to PyPI for non-torch deps.
 --extra-index-url https://pypi.org/simple
@@ -10,3 +9,4 @@ numpy>=1.26
 pandas>=2.2
 gymnasium>=0.29
 rich>=13.0.0
+psutil>=5.9

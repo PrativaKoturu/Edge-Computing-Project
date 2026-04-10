@@ -15,6 +15,7 @@ from .replay_buffer import GlobalReplayBuffer, Transition
 from .topics import policy_topic, telemetry_topic
 from .models import Td3Agent
 from .state_tracker import PerNodeStateTracker
+from .profiler import BenchmarkCollector, get_device_info
 
 
 def _now_ms() -> int:
@@ -70,13 +71,26 @@ def main() -> None:
     settings = load_settings()
     log = _setup_logger(settings.log_level)
 
-    device = torch.device("cpu")
+    # Device selection: use GPU if available, else CPU
+    if torch.cuda.is_available():
+        device = torch.device("cuda:0")
+        log.info("Using GPU: %s", torch.cuda.get_device_name(0))
+    else:
+        device = torch.device("cpu")
+        log.info("Using CPU (GPU not available)")
+
+    # Log device info
+    device_info = get_device_info()
+    log.info("Device info: %s", device_info)
+
     agent = Td3Agent().to(device)
     actor_opt = torch.optim.Adam(agent.actor.parameters(), lr=settings.actor_lr)
     critic_opt = torch.optim.Adam(agent.critic.parameters(), lr=settings.critic_lr)
 
     rb = GlobalReplayBuffer(capacity=settings.replay_size)
     tracker = PerNodeStateTracker()
+    bench = BenchmarkCollector()
+    bench.system_profiler.start()
 
     critic_updates = 0
     policy_publishes = 0
@@ -95,6 +109,15 @@ def main() -> None:
     def on_telemetry(topic: str, payload: str) -> None:
         nonlocal critic_updates, policy_publishes
         t = EdgeTelemetry.from_json(payload)
+
+        # Record metrics for this zone
+        bench.record_zone_telemetry(
+            node_id=t.node_id,
+            cache_hit=t.cache_hit,
+            latency_ms=t.latency_ms,
+            evicted=t.evicted,
+            anomaly=t.anomaly,
+        )
 
         # State before update (uses previous rolling windows + time since last request)
         s = tracker.build_state(
@@ -142,86 +165,101 @@ def main() -> None:
 
     log.info("Trainer loop started. Nodes=%s", ",".join(settings.edge_node_ids))
 
-    step = 0
-    while True:
-        time.sleep(0.05)
-        step += 1
+    try:
+        step = 0
+        while True:
+            time.sleep(0.05)
+            step += 1
 
-        if len(rb) < settings.batch_size:
-            continue
+            if len(rb) < settings.batch_size:
+                continue
 
-        batch = rb.sample(settings.batch_size)
-        s = torch.tensor([t.s for t in batch], dtype=torch.float32, device=device)
-        a = torch.tensor([[t.a] for t in batch], dtype=torch.float32, device=device)
-        r = torch.tensor([[t.r] for t in batch], dtype=torch.float32, device=device)
-        sp = torch.tensor([t.sp for t in batch], dtype=torch.float32, device=device)
-        done = torch.tensor([[1.0 if t.done else 0.0] for t in batch], dtype=torch.float32, device=device)
+            batch = rb.sample(settings.batch_size)
+            s = torch.tensor([t.s for t in batch], dtype=torch.float32, device=device)
+            a = torch.tensor([[t.a] for t in batch], dtype=torch.float32, device=device)
+            r = torch.tensor([[t.r] for t in batch], dtype=torch.float32, device=device)
+            sp = torch.tensor([t.sp for t in batch], dtype=torch.float32, device=device)
+            done = torch.tensor([[1.0 if t.done else 0.0] for t in batch], dtype=torch.float32, device=device)
 
-        with torch.no_grad():
-            noise = torch.randn((settings.batch_size, 1), device=device) * settings.policy_noise_std
-            noise = noise.clamp(-settings.noise_clip, settings.noise_clip)
-            ap = (agent.actor_target(sp) + noise).clamp(0.0, 1.0)
-            q1_t, q2_t = agent.critic_target(sp, ap)
-            q_t = torch.min(q1_t, q2_t)
-            target = r + settings.gamma * q_t * (1.0 - done)
+            t0 = time.time()
+            with torch.no_grad():
+                noise = torch.randn((settings.batch_size, 1), device=device) * settings.policy_noise_std
+                noise = noise.clamp(-settings.noise_clip, settings.noise_clip)
+                ap = (agent.actor_target(sp) + noise).clamp(0.0, 1.0)
+                q1_t, q2_t = agent.critic_target(sp, ap)
+                q_t = torch.min(q1_t, q2_t)
+                target = r + settings.gamma * q_t * (1.0 - done)
+            bench.record_timing("inference", (time.time() - t0) * 1000)
 
-        q1, q2 = agent.critic(s, a)
-        critic_loss = F.mse_loss(q1, target) + F.mse_loss(q2, target)
-        critic_opt.zero_grad()
-        critic_loss.backward()
-        critic_opt.step()
+            t0 = time.time()
+            q1, q2 = agent.critic(s, a)
+            critic_loss = F.mse_loss(q1, target) + F.mse_loss(q2, target)
+            critic_opt.zero_grad()
+            critic_loss.backward()
+            critic_opt.step()
+            bench.record_timing("critic_update", (time.time() - t0) * 1000)
 
-        critic_updates += 1
-        critic_losses.append(float(critic_loss.detach().cpu().item()))
-        if len(critic_losses) > 10:
-            critic_losses.pop(0)
+            critic_updates += 1
+            critic_losses.append(float(critic_loss.detach().cpu().item()))
+            if len(critic_losses) > 10:
+                critic_losses.pop(0)
 
-        if critic_updates % settings.policy_delay == 0:
-            actor_a = agent.actor(s)
-            q1_pi, _ = agent.critic(s, actor_a)
-            actor_loss = -q1_pi.mean()
-            actor_opt.zero_grad()
-            actor_loss.backward()
-            actor_opt.step()
-            actor_losses.append(float(actor_loss.detach().cpu().item()))
-            if len(actor_losses) > 10:
-                actor_losses.pop(0)
+            if critic_updates % settings.policy_delay == 0:
+                t0 = time.time()
+                actor_a = agent.actor(s)
+                q1_pi, _ = agent.critic(s, actor_a)
+                actor_loss = -q1_pi.mean()
+                actor_opt.zero_grad()
+                actor_loss.backward()
+                actor_opt.step()
+                bench.record_timing("actor_update", (time.time() - t0) * 1000)
 
-            agent.reset_targets(hard=False, tau=settings.tau)
+                actor_losses.append(float(actor_loss.detach().cpu().item()))
+                if len(actor_losses) > 10:
+                    actor_losses.pop(0)
 
-        if critic_updates % 50 == 0:
-            log.info(
-                "updates=%d replay=%d critic_loss(avg10)=%.4f actor_loss(avg10)=%.4f publishes=%d",
-                critic_updates,
-                len(rb),
-                sum(critic_losses) / max(1, len(critic_losses)),
-                sum(actor_losses) / max(1, len(actor_losses)),
-                policy_publishes,
-            )
-            # Publish stats for the dashboard (best-effort, no retention).
-            bus.publish(
-                "trainer/stats",
-                json.dumps(
-                    {
-                        "replay_size": len(rb),
-                        "critic_updates": critic_updates,
-                        "critic_loss_avg10": sum(critic_losses) / max(1, len(critic_losses)),
-                        "actor_loss_avg10": sum(actor_losses) / max(1, len(actor_losses)),
-                        "policy_publishes": policy_publishes,
-                    },
-                    separators=(",", ":"),
-                ),
-            )
+                agent.reset_targets(hard=False, tau=settings.tau)
 
-        if critic_updates % settings.quantize_every_critic_updates == 0:
-            float_w, int8_w = _quantize_policy_weights(agent.actor)
-            for nid in settings.edge_node_ids:
-                bus.publish(
-                    policy_topic(nid),
-                    PolicyUpdate(node_id=nid, ts_ms=_now_ms(), float_weights=float_w, int8_weights=int8_w).to_json(),
-                    qos=0,
+            if critic_updates % 50 == 0:
+                log.info(
+                    "updates=%d replay=%d critic_loss(avg10)=%.4f actor_loss(avg10)=%.4f publishes=%d",
+                    critic_updates,
+                    len(rb),
+                    sum(critic_losses) / max(1, len(critic_losses)),
+                    sum(actor_losses) / max(1, len(actor_losses)),
+                    policy_publishes,
                 )
-            policy_publishes += 1
+                # Publish stats for the dashboard (best-effort, no retention).
+                bus.publish(
+                    "trainer/stats",
+                    json.dumps(
+                        {
+                            "replay_size": len(rb),
+                            "critic_updates": critic_updates,
+                            "critic_loss_avg10": sum(critic_losses) / max(1, len(critic_losses)),
+                            "actor_loss_avg10": sum(actor_losses) / max(1, len(actor_losses)),
+                            "policy_publishes": policy_publishes,
+                        },
+                        separators=(",", ":"),
+                    ),
+                )
+
+            if critic_updates % settings.quantize_every_critic_updates == 0:
+                float_w, int8_w = _quantize_policy_weights(agent.actor)
+                for nid in settings.edge_node_ids:
+                    bus.publish(
+                        policy_topic(nid),
+                        PolicyUpdate(node_id=nid, ts_ms=_now_ms(), float_weights=float_w, int8_weights=int8_w).to_json(),
+                        qos=0,
+                    )
+                policy_publishes += 1
+
+    except KeyboardInterrupt:
+        log.info("Training interrupted.")
+    finally:
+        bench.system_profiler.stop()
+        report = bench.report()
+        log.info("Final benchmark report: %s", json.dumps(report, indent=2))
 
 
 if __name__ == "__main__":
