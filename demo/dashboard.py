@@ -122,7 +122,7 @@ def _layout(st: DashboardState) -> Layout:
 
 def main() -> None:
     console = Console()
-    host = _env("MQTT_HOST", "localhost")
+    host = _env("MQTT_HOST", "broker.hivemq.com")
     port = int(_env("MQTT_PORT", "1883"))
 
     st = DashboardState()

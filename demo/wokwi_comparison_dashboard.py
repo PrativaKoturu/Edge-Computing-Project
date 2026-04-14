@@ -94,7 +94,7 @@ class TrainerMetrics:
 class DashboardCollector:
     """Collects metrics from MQTT and maintains dashboard state."""
 
-    def __init__(self, mqtt_host: str = "localhost", mqtt_port: int = 1883):
+    def __init__(self, mqtt_host: str = "broker.hivemq.com", mqtt_port: int = 1883):
         self.mqtt_host = mqtt_host
         self.mqtt_port = mqtt_port
         self.zone_metrics: dict[str, ZoneMetrics] = {
@@ -316,7 +316,7 @@ def print_footer():
 
 def main():
     print(f"{Color.OKGREEN}Starting Wokwi Comparison Dashboard...{Color.ENDC}")
-    print("Connecting to MQTT broker (localhost:1883)...")
+    print("Connecting to MQTT broker (broker.hivemq.com:1883)...")
 
     collector = DashboardCollector()
     collector.connect()
