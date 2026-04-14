@@ -1,8 +1,0 @@
-[wokwi]
-version = 1
-
-# PlatformIO builds are driven from the host; Wokwi CLI just runs the produced ELF.
-# Use:
-# - pio run -e zone-a
-# - pio run -e zone-b
-# Then start two Wokwi instances pointing at each environment output.

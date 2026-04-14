@@ -43,7 +43,17 @@ control-plane/models/
 *.joblib
 
 # ── PlatformIO / firmware build artifacts ────────────────────────────────────
-firmware/.pio/
+.pio/
+.platformio/
+*.bin
+*.elf
+*.o
+*.a
+build/
+
+# ── Wokwi simulation ──────────────────────────────────────────────────────────
+.wokwi/
+.wokwi-cache/
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 # Docker creates these; not needed in source control
@@ -58,9 +68,21 @@ Thumbs.db
 .idea/
 .vscode/
 *.code-workspace
+.vscode/
 
 # ── Logs & tmp ───────────────────────────────────────────────────────────────
 *.log
 logs/
 tmp/
 temp/
+
+# ── Node modules (if any npm packages) ────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Environment files ─────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local

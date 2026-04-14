@@ -1,0 +1,34 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: mosquitto-broker
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ../control-plane/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    networks:
+      - wokwi-net
+
+  traffic:
+    build:
+      context: ../control-plane
+    depends_on:
+      - mosquitto
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      EDGE_NODE_IDS: "edge-rl-node"
+      BURST_PERIOD_S: "30"
+      BURST_SIZE: "20"
+      DATA_DIR: /app/data
+      LOG_LEVEL: INFO
+    volumes:
+      - ../data:/app/data
+    command: ["python", "-m", "control_plane.dataset_traffic_generator"]
+    networks:
+      - wokwi-net
+
+networks:
+  wokwi-net:
+    driver: bridge

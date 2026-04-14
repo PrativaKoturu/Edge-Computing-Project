@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "author": "Prativa Koturu",
+  "editor": "wokwi",
+  "title": "On-Device Q-Learning Edge Node",
+  "description": "ESP32 running on-device RL with local Q-learning training",
+  "parts": [
+    {
+      "type": "board-esp32-devkit-v1",
+      "id": "esp32",
+      "top": 0,
+      "left": 0,
+      "attrs": {
+        "name": "edge-rl-node"
+      }
+    }
+  ],
+  "connections": [],
+  "serial": [
+    {
+      "type": "serial",
+      "target": "esp32"
+    }
+  ]
+}

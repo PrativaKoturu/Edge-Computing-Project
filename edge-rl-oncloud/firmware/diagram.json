@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "author": "Prativa Koturu",
+  "editor": "wokwi",
+  "title": "Edge Computing RL Control Plane",
+  "description": "ESP32 edge node running centralized RL control plane with MQTT communication",
+  "parts": [
+    {
+      "type": "board-esp32-devkit-v1",
+      "id": "esp32",
+      "top": 0,
+      "left": 0,
+      "attrs": {
+        "name": "edge-rl-controller"
+      }
+    }
+  ],
+  "connections": []
+}

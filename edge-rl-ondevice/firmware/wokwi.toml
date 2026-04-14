@@ -1,0 +1,15 @@
+[wokwi]
+version = 1
+firmware = ".pio/build/edge-rl-node/firmware.bin"
+elf = ".pio/build/edge-rl-node/firmware.elf"
+
+[wokwi.simulation]
+speed = "1MHz"
+
+[[wokwi.uart]]
+index = 0
+baud = 115200
+
+[[wokwi.network]]
+host = "localhost"
+port = 1883
