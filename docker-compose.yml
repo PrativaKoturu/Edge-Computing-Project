@@ -1,34 +1,25 @@
 services:
-  mqtt:
-    image: eclipse-mosquitto:2
-    ports:
-      - "1883:1883"
-    volumes:
-      - ./control-plane/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-
   trainer:
     build:
       context: ./control-plane
     environment:
-      MQTT_HOST: mqtt
+      MQTT_HOST: broker.hivemq.com
       MQTT_PORT: "1883"
-      EDGE_NODE_IDS: "zone-a,zone-b"
+      EDGE_NODE_IDS: "zone-a"
       LOG_LEVEL: INFO
-    depends_on:
-      - mqtt
     command: ["python", "-m", "control_plane.trainer"]
 
   traffic:
     build:
       context: ./control-plane
     environment:
-      MQTT_HOST: mqtt
+      MQTT_HOST: broker.hivemq.com
       MQTT_PORT: "1883"
-      EDGE_NODE_IDS: "zone-a,zone-b"
+      EDGE_NODE_IDS: "zone-a"
       BURST_PERIOD_S: "30"
-      BURST_MIN_KB: "500"
-      BURST_MAX_KB: "2000"
+      BURST_SIZE: "20"
+      DATA_DIR: /app/data
       LOG_LEVEL: INFO
-    depends_on:
-      - mqtt
-    command: ["python", "-m", "control_plane.traffic_generator"]
+    volumes:
+      - ./data:/app/data
+    command: ["python", "-m", "control_plane.dataset_traffic_generator"]

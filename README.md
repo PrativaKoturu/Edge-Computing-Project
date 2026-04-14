@@ -1,12 +1,20 @@
 # Edge Computing MARL System
 
-A multi-agent reinforcement learning system that teaches ESP32 edge nodes to make smart caching decisions in real time.
+A multi-agent reinforcement learning system that teaches an ESP32 edge node to make smart caching decisions in real time.
 
 The demo shows the contrast between:
 - **Full TD3 + LTC policy** running on your CPU/GPU (centralized trainer)
-- **Quantized int8 8-weight policy** running on simulated ESP32 nodes in Wokwi (decentralized edge)
+- **Quantized int8 8-weight policy** running on a simulated ESP32 in Wokwi (decentralized edge)
 
 Both sides communicate over MQTT using the same message flow.
+
+---
+
+## What This System Does
+
+A factory floor has 50 CNC machines generating sensor streams (vibration, temperature, pressure). An ESP32 edge node decides which streams to cache locally vs. fetch from cloud. Caching is fast (45 ms); cloud fetch is slow (800–2000 ms).
+
+The RL trainer (on your machine) watches what the edge node does, computes rewards, and trains a neural network (TD3 + LTC). Every 200 updates it compresses the network into 8 int8 weights and pushes them to the ESP32. The ESP32 uses those weights to make smarter caching decisions.
 
 ---
 
@@ -14,96 +22,173 @@ Both sides communicate over MQTT using the same message flow.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Your Machine  (CPU / GPU)                                  │
-│  TD3 Trainer + Shared Replay Buffer                         │
-│  Learns from both zones → quantizes → pushes int8 policy    │
-└──────────────┬──────────────────────┬──────────────────────┘
-               │  MQTT                │  MQTT
-        ┌──────▼──────┐        ┌──────▼──────┐
-        │  Zone A     │        │  Zone B     │
-        │  ESP32 Sim  │        │  ESP32 Sim  │
-        │  (Wokwi)    │        │  (Wokwi)    │
-        └─────────────┘        └─────────────┘
-        64-item LRU cache      64-item LRU cache
-        int8 dot product       int8 dot product
-        ~0.7 µs per decision   ~0.7 µs per decision
+│  Your Machine (CPU / GPU)                                   │
+│                                                             │
+│  Traffic Generator  →  MQTT broker (HiveMQ)                │
+│                                ↓                           │
+│  TD3 Trainer  ←  edge/zone-a/telemetry                      │
+│  TD3 Trainer  →  edge/zone-a/policy  (int8 weights)         │
+└─────────────────────────────────────────────────────────────┘
+                         MQTT (HiveMQ public)
+                              ↕
+┌─────────────────────────────┐
+│  Wokwi (browser)            │
+│  ESP32 Simulator            │
+│  • 64-item LRU cache        │
+│  • int8 dot product policy  │
+│  • ~0.7 µs per decision     │
+└─────────────────────────────┘
 ```
 
-**CTDE — Centralized Training, Decentralized Execution**
-
-- Zone A and Zone B keep **independent** caches and rolling state windows
-- Both send telemetry to the trainer over MQTT
-- Trainer learns **one policy** from both zones' experience
-- Trainer quantizes and pushes int8 weights back to both zones every 200 updates
+**CTDE — Centralized Training, Decentralized Execution:**
+- The edge node runs cheap int8 inference (dot product, ~0.7 µs)
+- The trainer runs the full TD3+LTC network on CPU/GPU
+- The trainer learns from edge telemetry and pushes compressed weights back
 
 ---
 
-## Performance Numbers
+## Data Flow (step by step)
 
-| Where | Policy | Inference Time |
-|-------|--------|---------------|
+```
+1. Traffic generator sends JSON request  →  edge/zone-a/request
+   {"stream_id": "cnc-01/vibration", "payload_kb": 1200, "anomaly": false}
+
+2. ESP32 receives request, builds 8-element state vector:
+   [cache_occupancy, latency_norm, payload_norm, anomaly,
+    recent_hit_rate, stream_frequency, time_since_last_req, cache_pressure]
+
+3. ESP32 runs int8 dot product:
+   score = Σ weight[i] * state[i]   (8 multiplies, ~0.7 µs)
+   decision = (score > 0) OR anomaly
+
+4. ESP32 sends telemetry  →  edge/zone-a/telemetry
+   {"cache_hit": false, "latency_ms": 1523, "score_int32": -234, ...}
+
+5. Trainer receives telemetry, computes reward:
+   reward = +1 (hit) or -1 (miss) - 0.001×latency + 0.5×anomaly×hit - 0.3×pressure
+
+6. Trainer stores (state, action, reward, next_state) in replay buffer.
+   Once buffer has 64 transitions, TD3 training begins:
+   - Critic update:  minimize MSE between predicted Q and target Q
+   - Actor update:   maximize Q value w.r.t. policy
+   - Target networks soft-updated every 2 critic steps
+
+7. Every 200 critic updates, trainer quantizes actor weights:
+   - SVD of first layer weight matrix W [19×8]
+   - Compressed to 8 float values → scaled to int8
+   - Published  →  edge/zone-a/policy
+
+8. ESP32 receives new int8 weights, swaps them in immediately.
+   Next decisions use the trained policy.
+```
+
+**Where is RL happening?**
+- **RL inference** (using the policy): on the ESP32, step 3 above
+- **RL training** (improving the policy): on your CPU/GPU, step 6 above
+
+---
+
+## Performance
+
+| Where | Policy | Per-inference |
+|-------|--------|--------------|
 | Your CPU | Full TD3 + LTC neural net | ~0.19 ms |
 | Your GPU | Full TD3 + LTC neural net | ~0.02 ms |
 | ESP32 (Wokwi) | int8 8-weight dot product | **~0.7 µs** |
 
-Edge is **276× faster** than CPU — this is why we can't run the full network on an ESP32.
+Edge is **~270× faster** than CPU. This is why we cannot run the full network on an ESP32.
 
 ---
 
----
-
-## Path 1 — Running on CPU / GPU
-
-This is everything that runs on your machine: the MQTT broker, the TD3 trainer, and the traffic generator.
+## Running the System
 
 ### Prerequisites
 
-- Docker Desktop
+- Docker Desktop (running)
 - Python 3.11+
-- Dependencies:
-  ```bash
-  cd control-plane
-  pip install -r requirements.txt
-  ```
+- A browser (for Wokwi)
 
-### Step 1 — Start the control plane
+Install Python dependencies:
+
+```bash
+cd control-plane
+pip install -r requirements.txt
+```
+
+---
+
+### Step 1 — Start the control plane (Docker)
 
 ```bash
 docker compose up --build
 ```
 
-This starts three containers:
+This starts two containers:
 
 | Container | What it does |
 |-----------|-------------|
-| `mqtt` | Eclipse Mosquitto broker on port 1883 |
-| `trainer` | TD3 training loop, reads telemetry, writes policy |
-| `traffic` | Bursty traffic generator — 50 CNC machines, 30s bursts |
+| `trainer` | TD3 training loop — reads telemetry, updates policy, pushes weights |
+| `traffic` | Bursty traffic generator — 50 CNC machines, bursts every 30s |
 
-Wait until you see:
+Both connect to `broker.hivemq.com` (free public MQTT broker).
+
+Wait for:
 ```
-trainer    | INFO trainer: Trainer loop started. Nodes=zone-a,zone-b
+trainer    | INFO trainer: Trainer loop started. Nodes=zone-a
 traffic    | INFO traffic: Traffic generator started. period=30.0s
 ```
 
-### Step 2 — Watch the trainer learn
+---
 
-Open a second terminal:
+### Step 2 — Start the ESP32 edge node (Wokwi)
+
+1. Go to **https://wokwi.com/**
+2. Click **Start new project** → select **ESP32** → click **Create**
+3. Delete all code in the editor
+4. Open [firmware/src/main.cpp](firmware/src/main.cpp), copy everything, paste into Wokwi
+5. Click **▶ Run**
+
+Watch the serial monitor at the bottom:
+```
+Boot node_id=zone-a
+Connecting WiFi SSID=Wokwi-GUEST
+WiFi connected ip=10.10.0.2
+Connecting MQTT broker.hivemq.com:1883
+MQTT connected. Subscribed: edge/zone-a/request, edge/zone-a/policy
+```
+
+Once connected, requests arrive every 30 seconds:
+```
+[req] stream=cnc-01/vibration payload=1200KB anomaly=0 hit=0 latency=1523ms cache=5
+[score] i32=-234 decision=0 s=[10,127,100,0,2,5,50,8]
+```
+
+After ~200 critic updates (~2 minutes), the first policy arrives:
+```
+[policy] updated int8[0]=-12 float_avg=0.123
+```
+
+---
+
+### Step 3 — Watch the trainer learn
 
 ```bash
 docker compose logs -f trainer
 ```
 
-You will see:
 ```
 INFO trainer: Replay size=100 latest node=zone-a hit=False lat=1523ms
 INFO trainer: updates=50  replay=120  critic_loss(avg10)=0.3421  actor_loss(avg10)=-0.0123
-INFO trainer: updates=100 replay=150  critic_loss(avg10)=0.1234  actor_loss(avg10)=-0.0089
+INFO trainer: updates=200 replay=200  critic_loss(avg10)=0.1234  actor_loss(avg10)=-0.0089
 ```
 
 `critic_loss` decreasing = the model is learning.
 
-### Step 3 — Run the hardware benchmark (CPU vs Edge comparison)
+---
+
+### Step 4 — Run the hardware benchmark
+
+In a new terminal (with Docker still running):
 
 ```bash
 python3 demo/hardware_benchmark.py
@@ -111,178 +196,43 @@ python3 demo/hardware_benchmark.py
 
 Output:
 ```
-CPU TD3+LTC:           0.195 ms per inference
-Edge int8 (simulated): 0.0007 ms per inference  (0.70 µs)
-Edge Speedup:          276x faster than CPU
-
-Zone A hit rate: 9.0%
-Zone B hit rate: 12.0%
+CPU TD3+LTC:              0.195 ms per inference
+Edge int8 (simulated):   0.0007 ms per inference  (0.70 µs)
+Edge Speedup:             ~270x faster than CPU
 ```
 
-This is the core proof: full neural net on CPU vs quantized int8 on edge.
+This is the core comparison — the full neural net on CPU vs. quantized int8 on the ESP32.
 
-### Step 4 — Run the comparison dashboard
+---
+
+### Step 5 — Run the live dashboard
 
 ```bash
 python3 demo/wokwi_comparison_dashboard.py
 ```
 
-Shows Zone A, Zone B, and trainer metrics side by side, refreshing every 2 seconds.
-
-### Step 5 — Run CPU vs Edge policy comparison
-
-```bash
-python3 demo/compare_mode.py
-```
-
-Runs 20 synthetic requests through both the full LTC network and the int8 policy. Shows per-request decisions, hit rates, and latency comparison.
+Shows edge node and trainer metrics side by side, refreshing every 2 seconds. The system status panel shows which of the 4 pipeline stages are active.
 
 ---
 
----
+## Showing the Demo to Your Professor
 
-## Path 2 — Running on Wokwi (ESP32 Simulation)
-
-This runs the edge firmware on two simulated ESP32s in the Wokwi web IDE. Each simulator connects to the MQTT broker on your machine and behaves as a real edge node.
-
-**The control plane (Path 1, Step 1) must be running before you start this.**
-
-### Step 1 — Build the firmware
-
-```bash
-cd firmware
-pio run -e zone-a
-pio run -e zone-b
-```
-
-This compiles two binaries — one with `NODE_ID="zone-a"` and one with `NODE_ID="zone-b"`.
-
-### Step 2 — Open Wokwi in two browser tabs
-
-Go to **https://wokwi.com/** and open it in **two separate tabs**.
-
-### Step 3 — Set up Tab 1 as Zone A
-
-1. Click **Start new project**
-2. Select **ESP32**
-3. Click **Create**
-4. Delete all code in the editor
-5. Open `firmware/src/main.cpp` in your editor, copy everything, paste it into Wokwi
-6. Click **▶ Run** (green play button at the top)
-
-Watch the serial monitor at the bottom:
-```
-[Boot] zone-a
-[WiFi] Connecting SSID=Wokwi-GUEST
-[WiFi] Connected  ip=10.10.0.2
-[MQTT] Connecting mqtt host.wokwi.internal:1883
-[MQTT] Connected. Subscribed: edge/zone-a/request, edge/zone-a/policy
-```
-
-Zone A is now live and waiting for requests.
-
-### Step 4 — Set up Tab 2 as Zone B
-
-Repeat Step 3 in the second tab, but before clicking Run, find this line in the code:
-
-```cpp
-#ifndef NODE_ID
-#define NODE_ID "zone-a"    // <-- change this to "zone-b"
-#endif
-```
-
-Change it to:
-```cpp
-#define NODE_ID "zone-b"
-```
-
-Then click **▶ Run**.
-
-Serial output should show:
-```
-[Boot] zone-b
-[MQTT] Connected. Subscribed: edge/zone-b/request, edge/zone-b/policy
-```
-
-### Step 5 — Watch requests come in
-
-Once traffic starts (every 30 seconds), both tabs will show:
-
-```
-[req] stream=cnc-01/vibration payload=1200KB anomaly=0 hit=0 latency=1523ms cache=5
-[score] i32=12345 decision=1 s=[10,127,100,0,2,5,50,8]
-```
-
-- `hit=0` → cache miss, fetch from cloud (800–2000 ms)
-- `hit=1` → cache hit, served locally (45 ms)
-- `score` → output of the int8 dot product: `Σ w[i] * state[i]`
-- `decision=1` → cache this stream for next time
-
-### Step 6 — Watch policy updates arrive
-
-After ~200 critic updates on the trainer side (~2 minutes), both tabs receive new int8 weights:
-
-```
-[policy] updated int8[0]=-12 float_avg=0.123
-```
-
-The edge node swaps in the new weights immediately. Future decisions use the trained policy.
-
-### What the int8 inference looks like in the firmware
-
-```cpp
-// 8-element dot product, runs in ~0.7 µs on ESP32
-int32_t score = 0;
-for (int i = 0; i < 8; i++) {
-    score += (int32_t)policyWeightsInt8[i] * (int32_t)state[i];
-}
-bool cacheDecision = (score > threshold) || anomaly;
-```
-
-This is the entire "neural network" that runs on the ESP32. The full LTC network on CPU takes 0.19 ms and has thousands of operations — the int8 version takes 0.7 µs and has 8 multiplies.
-
----
-
----
-
-## Seeing Both Running at the Same Time
-
-The best way to show the comparison is to have all of these open simultaneously:
+Have these open simultaneously:
 
 | Window | Command | Shows |
 |--------|---------|-------|
-| Terminal 1 | `docker compose up --build` | Trainer + MQTT running |
-| Terminal 2 | `docker compose logs -f trainer` | Loss decreasing |
-| Terminal 3 | `python3 demo/wokwi_comparison_dashboard.py` | Live metrics |
-| Browser Tab 1 | wokwi.com — Zone A | ESP32 serial: requests + scores |
-| Browser Tab 2 | wokwi.com — Zone B | ESP32 serial: requests + scores |
+| Terminal 1 | `docker compose up --build` | Trainer + traffic running |
+| Terminal 2 | `docker compose logs -f trainer` | TD3 loss decreasing in real time |
+| Terminal 3 | `python3 demo/hardware_benchmark.py` | 270x speedup proof |
+| Terminal 4 | `python3 demo/wokwi_comparison_dashboard.py` | Live dashboard |
+| Browser | wokwi.com | ESP32 serial: requests + scores + policy updates |
 
-Expected timeline once everything is connected:
+**What to point to:**
 
-```
-0–10s    Zones boot and connect to MQTT
-10–20s   Traffic generator sends first burst, both Wokwi tabs show [req] messages
-20–60s   Trainer accumulates telemetry, starts critic updates
-~120s    First policy pushed to both zones — [policy] updated in serial output
-2+ min   Cache hit rates climb from 0% toward 10–12%
-```
-
----
-
-## Verifying the Connection
-
-```bash
-# Confirm containers are running
-docker compose ps
-
-# Watch raw telemetry from both zones
-docker compose exec mqtt mosquitto_sub -t "edge/+/telemetry"
-
-# Watch policy being sent to zones
-docker compose exec mqtt mosquitto_sub -t "edge/+/policy"
-```
-
-If the Wokwi serial shows `[MQTT] Connected` and the telemetry subscription shows JSON, everything is wired up correctly.
+1. **Wokwi serial** → "This is the actual RL policy running on an ESP32 at 0.7 µs"
+2. **Trainer logs** → "This is the full neural network training on CPU — critic loss going down = it's learning"
+3. **Benchmark output** → "270x speedup — full network is too slow for an ESP32, so we quantize"
+4. **Dashboard step 4** → "When this says policy pushed, the ESP32 just received new weights from the trained network"
 
 ---
 
@@ -292,10 +242,10 @@ If the Wokwi serial shows `[MQTT] Connected` and the telemetry subscription show
 .
 ├── control-plane/
 │   ├── control_plane/
-│   │   ├── trainer.py            # TD3 loop, per-zone metrics, GPU detection
+│   │   ├── trainer.py            # TD3 loop, GPU detection, policy quantize + publish
 │   │   ├── models.py             # LTC actor + TD3 twin critics
-│   │   ├── state_tracker.py      # Per-zone independent rolling state
-│   │   ├── replay_buffer.py      # Shared global replay buffer
+│   │   ├── state_tracker.py      # Rolling state windows per node
+│   │   ├── replay_buffer.py      # Shared replay buffer
 │   │   ├── traffic_generator.py  # 50-machine CNC bursty traffic
 │   │   ├── profiler.py           # CPU/memory/timing metrics
 │   │   ├── messages.py           # MQTT message schemas
@@ -306,11 +256,11 @@ If the Wokwi serial shows `[MQTT] Connected` and the telemetry subscription show
 │   └── requirements.txt
 ├── firmware/
 │   ├── src/main.cpp              # ESP32: int8 policy, LRU cache, MQTT
-│   └── platformio.ini            # zone-a and zone-b build envs
+│   └── platformio.ini            # Build config
 ├── demo/
 │   ├── hardware_benchmark.py     # CPU vs GPU vs Edge inference speed
 │   ├── compare_mode.py           # CPU policy vs Edge policy, side by side
-│   ├── wokwi_comparison_dashboard.py  # Live zone + trainer metrics
+│   ├── wokwi_comparison_dashboard.py  # Live metrics dashboard
 │   └── dashboard.py              # Trainer-only stats
 ├── docker-compose.yml
 └── README.md
@@ -322,9 +272,10 @@ If the Wokwi serial shows `[MQTT] Connected` and the telemetry subscription show
 
 | Problem | Fix |
 |---------|-----|
-| Wokwi serial stuck at `Connecting WiFi` | Click Stop then Run again in Wokwi |
-| Wokwi shows `[MQTT] failed rc=4` | Docker not running — run `docker compose up --build` first |
-| `Replay size=0` stays at 0 | Wokwi not connected — check serial shows `[MQTT] Connected` |
-| No `[req]` messages in Wokwi | Traffic bursts every 30s — wait up to 30s after connecting |
-| No policy updates after 2 min | Check `docker compose logs trainer` for `updates=200` |
+| Wokwi serial stuck at `Connecting WiFi` | Click Stop then Run again |
+| Wokwi shows `MQTT failed rc=-2` | MQTT_HOST in firmware must be `broker.hivemq.com`, not `host.wokwi.internal` |
+| Wokwi shows `MQTT failed rc=4` | Docker not running — start `docker compose up --build` first |
+| `Replay size=0` stays at 0 | Wokwi not connected — check serial shows `MQTT connected` |
+| No `[req]` in Wokwi | Bursts every 30s — wait up to 30s after connecting |
+| No policy update after 2 min | Check `docker compose logs trainer` for `updates=200` |
 | `ModuleNotFoundError: ncps` | `cd control-plane && pip install -r requirements.txt` |

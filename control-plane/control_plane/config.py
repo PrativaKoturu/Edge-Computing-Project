@@ -34,7 +34,7 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    edge_node_ids = [s.strip() for s in _env("EDGE_NODE_IDS", "zone-a,zone-b").split(",") if s.strip()]
+    edge_node_ids = [s.strip() for s in _env("EDGE_NODE_IDS", "zone-a").split(",") if s.strip()]
     return Settings(
         mqtt_host=_env("MQTT_HOST", "localhost"),
         mqtt_port=int(_env("MQTT_PORT", "1883")),

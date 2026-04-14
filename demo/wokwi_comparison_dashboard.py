@@ -2,11 +2,10 @@
 Wokwi Comparison Dashboard
 
 Real-time visualization of:
-- Zone A (Wokwi ESP32 simulation)
-- Zone B (Wokwi ESP32 simulation)
+- Edge Node zone-a (Wokwi ESP32 simulation)
 - Control Plane (your CPU/GPU trainer)
 
-Shows side-by-side metrics and performance comparison.
+Shows live metrics: cache hits, latency, RL training progress.
 """
 
 from __future__ import annotations
@@ -100,7 +99,6 @@ class DashboardCollector:
         self.mqtt_port = mqtt_port
         self.zone_metrics: dict[str, ZoneMetrics] = {
             "zone-a": ZoneMetrics("zone-a"),
-            "zone-b": ZoneMetrics("zone-b"),
         }
         self.trainer_metrics = TrainerMetrics()
         self._lock = threading.Lock()
@@ -245,71 +243,63 @@ def print_trainer_section(trainer_metrics: TrainerMetrics):
 
 
 def print_comparison_section(zones: dict[str, ZoneMetrics], trainer: TrainerMetrics):
-    """Print comparison between zones and trainer."""
-    print(f"{Color.HEADER}{Color.BOLD}┌─ COMPARISON ─┐{Color.ENDC}")
+    """Print comparison between edge node and central trainer."""
+    print(f"{Color.HEADER}{Color.BOLD}┌─ COMPARISON: EDGE vs CENTRAL ─┐{Color.ENDC}")
 
     zone_a = zones.get("zone-a")
-    zone_b = zones.get("zone-b")
 
-    print(f"  {Color.BOLD}Zone A{Color.ENDC} vs {Color.BOLD}Zone B{Color.ENDC}")
-    if zone_a and zone_b:
-        a_hit = zone_a.hit_rate()
-        b_hit = zone_b.hit_rate()
-        print(f"    Hit Rate:     {a_hit:6.1f}%  vs  {b_hit:6.1f}%  {'(A better)' if a_hit > b_hit else '(B better)' if b_hit > a_hit else '(Tied)'}")
-
-        a_lat = zone_a.avg_latency_ms()
-        b_lat = zone_b.avg_latency_ms()
-        print(f"    Avg Latency:  {a_lat:6.1f}ms  vs  {b_lat:6.1f}ms")
-
-        print(f"    Total Req:    {zone_a.requests:6d}  vs  {zone_b.requests:6d}")
-
+    print(f"  {Color.BOLD}Edge Node (ESP32 on Wokwi){Color.ENDC}  vs  {Color.BOLD}Central Trainer (your CPU/GPU){Color.ENDC}")
     print()
-    print(f"  {Color.BOLD}Edge (Wokwi) vs Control (CPU){Color.ENDC}")
-    if zone_a:
-        print(f"    Inference:    ~0.7 µs (int8)  vs  ~190 µs (TD3+LTC)")
-        print(f"    Speedup:      {Color.OKGREEN}~270x faster{Color.ENDC} on edge!")
-
+    if zone_a and zone_a.requests > 0:
+        print(f"    Edge cache hit rate:    {zone_a.hit_rate():6.1f}%   (improves as policy updates arrive)")
+        print(f"    Edge avg latency:       {zone_a.avg_latency_ms():6.1f} ms  (45ms hit, 800-2000ms miss)")
+        print(f"    Edge requests seen:     {zone_a.requests:6d}")
+    print()
+    print(f"  {Color.BOLD}Inference speed comparison:{Color.ENDC}")
+    print(f"    ESP32 int8 dot product:  ~0.7 µs   (8 multiplies + add)")
+    print(f"    CPU  full TD3+LTC net:  ~190 µs   (thousands of ops)")
+    print(f"    Speedup:                {Color.OKGREEN}~270x faster on edge{Color.ENDC}")
+    print(f"    Why:                    Full network can't fit on ESP32 (no float32 tensor ops)")
     print()
 
 
 def print_insights(zones: dict[str, ZoneMetrics], trainer: TrainerMetrics):
-    """Print actionable insights."""
-    print(f"{Color.HEADER}{Color.BOLD}┌─ INSIGHTS ─┐{Color.ENDC}")
+    """Print what is happening right now in the system."""
+    print(f"{Color.HEADER}{Color.BOLD}┌─ SYSTEM STATUS ─┐{Color.ENDC}")
 
     zone_a = zones.get("zone-a")
-    zone_b = zones.get("zone-b")
 
     insights = []
 
+    # Step 1: Is telemetry flowing?
     if trainer.replay_size == 0:
-        insights.append(f"{Color.WARNING}⚠ Waiting for telemetry (make sure Wokwi zones are connected){Color.ENDC}")
-    elif trainer.critic_updates == 0:
-        insights.append(f"{Color.WARNING}⚠ Trainer waiting for enough samples (need {trainer.replay_size}/64 more){Color.ENDC}")
+        insights.append(f"{Color.WARNING}[1/4] Trainer waiting for telemetry — make sure Wokwi is running and shows [req] messages{Color.ENDC}")
     else:
-        insights.append(f"{Color.OKGREEN}✓ Training in progress ({trainer.critic_updates} critic updates){Color.ENDC}")
+        insights.append(f"{Color.OKGREEN}[1/4] Telemetry flowing: {trainer.replay_size} transitions in replay buffer{Color.ENDC}")
 
+    # Step 2: Is edge node connected?
     if zone_a and zone_a.requests > 0:
-        insights.append(f"{Color.OKGREEN}✓ Zone A is connected and receiving requests{Color.ENDC}")
+        insights.append(f"{Color.OKGREEN}[2/4] Edge node connected: {zone_a.requests} requests processed on ESP32{Color.ENDC}")
     else:
-        insights.append(f"{Color.WARNING}⚠ Zone A not yet connected or no requests received{Color.ENDC}")
+        insights.append(f"{Color.WARNING}[2/4] Edge node not connected — paste firmware into Wokwi and click Run{Color.ENDC}")
 
-    if zone_b and zone_b.requests > 0:
-        insights.append(f"{Color.OKGREEN}✓ Zone B is connected and receiving requests{Color.ENDC}")
-    else:
-        insights.append(f"{Color.WARNING}⚠ Zone B not yet connected or no requests received{Color.ENDC}")
-
-    if trainer.policy_publishes > 0:
-        insights.append(f"{Color.OKGREEN}✓ Policy updates sent to edges ({trainer.policy_publishes} times){Color.ENDC}")
-    else:
-        insights.append(f"{Color.WARNING}⚠ Waiting to publish first policy (need ~200 critic updates){Color.ENDC}")
-
-    if zone_a and zone_b and zone_a.requests > 10 and zone_b.requests > 10:
-        a_hit = zone_a.hit_rate()
-        b_hit = zone_b.hit_rate()
-        if abs(a_hit - b_hit) < 5:
-            insights.append(f"{Color.OKGREEN}✓ Zones learning together! Hit rates converging{Color.ENDC}")
+    # Step 3: Is RL training running?
+    if trainer.critic_updates == 0:
+        needed = max(0, 64 - trainer.replay_size)
+        if needed > 0:
+            insights.append(f"{Color.WARNING}[3/4] RL training waiting: need {needed} more transitions to start (have {trainer.replay_size}/64){Color.ENDC}")
         else:
-            insights.append(f"{Color.OKCYAN}ℹ Zones have different request patterns (expected){Color.ENDC}")
+            insights.append(f"{Color.WARNING}[3/4] RL training not started yet (enough data, starting soon){Color.ENDC}")
+    else:
+        avg_loss = trainer.critic_loss_avg10
+        insights.append(f"{Color.OKGREEN}[3/4] RL training running: {trainer.critic_updates} TD3 updates, critic_loss={avg_loss:.4f}{Color.ENDC}")
+
+    # Step 4: Has policy been pushed to edge?
+    if trainer.policy_publishes > 0:
+        insights.append(f"{Color.OKGREEN}[4/4] Policy pushed to ESP32 {trainer.policy_publishes} time(s) — edge is using trained weights{Color.ENDC}")
+    else:
+        updates_needed = max(0, 200 - trainer.critic_updates)
+        insights.append(f"{Color.WARNING}[4/4] First policy push pending: {updates_needed} more critic updates needed (of 200){Color.ENDC}")
 
     for insight in insights:
         print(f"  {insight}")
@@ -343,7 +333,6 @@ def main():
 
             # Print sections
             print_zone_section("zone-a", zones["zone-a"])
-            print_zone_section("zone-b", zones["zone-b"])
             print_trainer_section(trainer)
             print_comparison_section(zones, trainer)
             print_insights(zones, trainer)

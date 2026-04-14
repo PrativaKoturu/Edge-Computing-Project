@@ -1,0 +1,66 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+sim-env/
+
+# ── Dataset / large files ─────────────────────────────────────────────────────
+data/*.csv
+data/*.zip
+data/*.parquet
+data/*.feather
+data/*.h5
+data/*.hdf5
+# keep the placeholder so the empty dir is tracked
+!data/.gitkeep
+
+# ── Trained model checkpoints ─────────────────────────────────────────────────
+control-plane/models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.pkl
+*.joblib
+
+# ── PlatformIO / firmware build artifacts ────────────────────────────────────
+firmware/.pio/
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+# Docker creates these; not needed in source control
+docker-compose.override.yml
+
+# ── OS / editor noise ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# ── Logs & tmp ───────────────────────────────────────────────────────────────
+*.log
+logs/
+tmp/
+temp/

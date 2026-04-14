@@ -8,7 +8,7 @@
 #endif
 
 #ifndef MQTT_HOST
-#define MQTT_HOST "host.wokwi.internal"
+#define MQTT_HOST "broker.hivemq.com"
 #endif
 
 #ifndef MQTT_PORT

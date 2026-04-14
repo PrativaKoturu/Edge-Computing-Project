@@ -288,32 +288,30 @@ def main() -> None:
     print(f"  Speedup vs CPU: {speedup_vs_cpu:.1f}x")
     print()
 
-    # Zone simulation
+    # Zone simulation (single zone)
     print("=" * 80)
-    print("2. ZONE A vs ZONE B CACHING PERFORMANCE (100 requests each)")
+    print("2. EDGE NODE CACHING PERFORMANCE (100 requests)")
     print("=" * 80 + "\n")
 
-    zone_a = zone_simulation("zone-a", actor, edge_policy, num_requests=100)
-    zone_b = zone_simulation("zone-b", actor, edge_policy, num_requests=100)
+    zone_data = zone_simulation("zone-a", actor, edge_policy, num_requests=100)
 
-    for zone_data in [zone_a, zone_b]:
-        print(f"{zone_data['zone'].upper()}:")
-        print(f"  Requests: {zone_data['requests']}")
-        print()
-        print(f"  CPU Policy:")
-        print(f"    Hit rate: {zone_data['cpu']['hit_rate']:.2%}")
-        print(f"    Avg latency: {zone_data['cpu']['avg_latency_ms']:.1f} ms")
-        print(f"    Inference: {zone_data['cpu']['inference_time_mean_us']:.2f} µs (avg)")
-        print()
-        print(f"  Edge Policy:")
-        print(f"    Hit rate: {zone_data['edge']['hit_rate']:.2%}")
-        print(f"    Avg latency: {zone_data['edge']['avg_latency_ms']:.1f} ms")
-        print(f"    Inference: {zone_data['edge']['inference_time_mean_us']:.2f} µs (avg)")
-        print()
-        print(f"  Tradeoff (Edge vs CPU):")
-        print(f"    Hit rate delta: {zone_data['tradeoff']['hit_rate_diff']:+.2%}")
-        print(f"    Latency delta: {zone_data['tradeoff']['latency_diff_ms']:+.1f} ms")
-        print()
+    print(f"EDGE NODE (zone-a):")
+    print(f"  Requests: {zone_data['requests']}")
+    print()
+    print(f"  CPU Policy (full TD3+LTC network):")
+    print(f"    Hit rate: {zone_data['cpu']['hit_rate']:.2%}")
+    print(f"    Avg latency: {zone_data['cpu']['avg_latency_ms']:.1f} ms")
+    print(f"    Inference: {zone_data['cpu']['inference_time_mean_us']:.2f} µs (avg)")
+    print()
+    print(f"  Edge Policy (int8 dot product on ESP32):")
+    print(f"    Hit rate: {zone_data['edge']['hit_rate']:.2%}")
+    print(f"    Avg latency: {zone_data['edge']['avg_latency_ms']:.1f} ms")
+    print(f"    Inference: {zone_data['edge']['inference_time_mean_us']:.2f} µs (avg)")
+    print()
+    print(f"  Tradeoff (Edge vs CPU):")
+    print(f"    Hit rate delta: {zone_data['tradeoff']['hit_rate_diff']:+.2%}")
+    print(f"    Latency delta: {zone_data['tradeoff']['latency_diff_ms']:+.1f} ms")
+    print()
 
     # Summary comparison
     print("=" * 80)
@@ -321,28 +319,22 @@ def main() -> None:
     print("=" * 80 + "\n")
 
     print("Inference Speed Comparison:")
-    print(f"  CPU TD3+LTC:          {cpu_result.mean_inference_ms:8.3f} ms per inference")
+    print(f"  CPU TD3+LTC (full network):  {cpu_result.mean_inference_ms:8.3f} ms per inference")
     if torch.cuda.is_available() and gpu_result:
-        print(f"  GPU TD3+LTC:          {gpu_result.mean_inference_ms:8.3f} ms per inference")
-        print(f"  GPU Speedup:          {speedup:8.1f}x faster")
-    print(f"  Edge int8 (simulated): {edge_result.mean_inference_ms:8.4f} ms per inference ({edge_result.mean_inference_ms * 1000:.2f} µs)")
-    print(f"  Edge Speedup:         {speedup_vs_cpu:8.1f}x faster than CPU")
+        print(f"  GPU TD3+LTC (full network):  {gpu_result.mean_inference_ms:8.3f} ms per inference")
+        print(f"  GPU Speedup vs CPU:          {speedup:8.1f}x faster")
+    print(f"  Edge int8 (ESP32 simulated): {edge_result.mean_inference_ms:8.4f} ms ({edge_result.mean_inference_ms * 1000:.2f} µs)")
+    print(f"  Edge Speedup vs CPU:         {speedup_vs_cpu:8.1f}x faster")
     print()
 
-    print("Deployment Scenario Summary:")
-    print(f"  CPU execution: Best for trainer/central policy. Slow for edge (~{cpu_result.mean_inference_ms:.1f} ms/req)")
+    print("What this means:")
+    print(f"  The full LTC network runs on your CPU for TRAINING — ~{cpu_result.mean_inference_ms:.1f} ms per forward pass.")
     if torch.cuda.is_available() and gpu_result:
         gpu_speedup = cpu_result.mean_inference_ms / gpu_result.mean_inference_ms
-        print(f"  GPU execution: {gpu_speedup:.1f}x faster training if available. Not suitable for ESP32 edge.")
-    print(f"  Edge int8:     Deployed on ESP32. Ultra-fast (~{edge_result.mean_inference_ms * 1000:.1f} µs), quantized quality loss.")
-    print()
-
-    print("Zone Performance Parity:")
-    cpu_avg_hit = (zone_a['cpu']['hit_rate'] + zone_b['cpu']['hit_rate']) / 2
-    edge_avg_hit = (zone_a['edge']['hit_rate'] + zone_b['edge']['hit_rate']) / 2
-    print(f"  CPU hit rate (avg A&B): {cpu_avg_hit:.2%}")
-    print(f"  Edge hit rate (avg A&B): {edge_avg_hit:.2%}")
-    print(f"  Zone isolation: Zones maintain independent cache state and rolling stats")
+        print(f"  On GPU it is {gpu_speedup:.1f}x faster, useful for training throughput.")
+    print(f"  The ESP32 can only run a quantized int8 dot product — {edge_result.mean_inference_ms * 1000:.1f} µs.")
+    print(f"  This {speedup_vs_cpu:.0f}x speedup is why we cannot run the full network on an ESP32.")
+    print(f"  The trainer pushes compressed weights to the ESP32 every 200 updates (CTDE).")
     print()
 
     print("=" * 80)
