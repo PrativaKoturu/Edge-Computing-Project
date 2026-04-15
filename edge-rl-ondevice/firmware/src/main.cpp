@@ -27,6 +27,7 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <LiquidCrystal_I2C.h>
 #include <math.h>
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -42,6 +43,25 @@
 
 static const char *WIFI_SSID = "Wokwi-GUEST";
 static const char *WIFI_PASS = "";
+
+// ── LCD Display Setup ─────────────────────────────────────────────────────────
+#define LCD_ADDR 0x27
+#define LCD_COLS 16
+#define LCD_ROWS 2
+#define LED_PIN 13
+#define BUTTON_PIN 12
+
+LiquidCrystal_I2C lcd(LCD_ADDR, LCD_COLS, LCD_ROWS);
+
+static void lcdPrint(const char *row0, const char *row1 = nullptr) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(row0);
+  if (row1) {
+    lcd.setCursor(0, 1);
+    lcd.print(row1);
+  }
+}
 
 // ── RL Hyperparameters ────────────────────────────────────────────────────────
 #define STATE_DIM 8
@@ -308,6 +328,12 @@ static void onMessage(char *topic, byte *payload, unsigned int len) {
     // ── 8. Serial output ─────────────────────────────────────────────────────
     float hitRate = totalSteps > 0 ? (float)totalHits / (float)totalSteps * 100.0f : 0.0f;
 
+    // Update LCD display with current status
+    char lcdLine1[17], lcdLine2[17];
+    snprintf(lcdLine1, sizeof(lcdLine1), "Steps:%d Hit:%d%%", totalSteps, (int)hitRate);
+    snprintf(lcdLine2, sizeof(lcdLine2), "Cache:%d Eps:%.2f", cacheCount, EPSILON);
+    lcdPrint(lcdLine1, lcdLine2);
+
     Serial.printf("[req]     stream=%-30s  hit=%d  lat=%4dms  cache=%2d\n",
                   streamId.c_str(), (int)hit, latencyMs, cacheCount);
     if (hasPrev && totalSteps > 1) {
@@ -340,14 +366,18 @@ static void onMessage(char *topic, byte *payload, unsigned int len) {
 static void ensureWifi() {
     if (WiFi.status() == WL_CONNECTED) return;
     Serial.printf("[wifi] Connecting to %s ", WIFI_SSID);
+    lcdPrint("WiFi", "Connecting...");
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     while (WiFi.status() != WL_CONNECTED) { delay(200); Serial.print("."); }
     Serial.printf("\n[wifi] Connected  ip=%s\n", WiFi.localIP().toString().c_str());
+    lcdPrint("WiFi OK", WiFi.localIP().toString().c_str());
+    delay(1500);
 }
 
 static void ensureMqtt() {
     if (mqttClient.connected()) return;
+    lcdPrint("MQTT", "Connecting...");
     mqttClient.setServer(MQTT_HOST, MQTT_PORT);
     mqttClient.setCallback(onMessage);
     while (!mqttClient.connected()) {
@@ -356,6 +386,8 @@ static void ensureMqtt() {
         if (mqttClient.connect(cid.c_str())) {
             mqttClient.subscribe(topicRequest().c_str(), 0);
             Serial.printf("[mqtt] Connected.  Subscribed: %s\n", topicRequest().c_str());
+            lcdPrint("MQTT OK", "Ready!");
+            delay(1500);
         } else {
             Serial.printf("[mqtt] Failed rc=%d  retrying in 2s...\n", mqttClient.state());
             delay(2000);
@@ -369,6 +401,11 @@ static void ensureMqtt() {
 void setup() {
     Serial.begin(115200);
     delay(500);
+    
+    // Initialize LCD
+    lcd.init();
+    lcd.backlight();
+    lcdPrint("Edge RL Node", "Initializing...");
     
     // Force flush and simple test print
     Serial.println("");

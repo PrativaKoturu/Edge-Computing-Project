@@ -13,9 +13,44 @@
       "attrs": {
         "name": "edge-rl-node"
       }
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd",
+      "top": 100,
+      "left": 220,
+      "attrs": {
+        "pins": "i2c",
+        "i2cAddress": "0x27"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led1",
+      "top": 260,
+      "left": 220,
+      "attrs": {
+        "color": "green"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "button1",
+      "top": 310,
+      "left": 220,
+      "attrs": {}
     }
   ],
-  "connections": [],
+  "connections": [
+    [ "esp32:D21",   "lcd:SDA",  "blue",   [] ],
+    [ "esp32:D22",   "lcd:SCL",  "yellow", [] ],
+    [ "esp32:3V3",   "lcd:VCC",  "red",    [] ],
+    [ "esp32:GND.1", "lcd:GND",  "black",  [] ],
+    [ "esp32:D13",   "led1:A",  "red",    [] ],
+    [ "esp32:GND.2", "led1:C",  "black",  [] ],
+    [ "esp32:D12",   "button1:1", "blue",   [] ],
+    [ "esp32:GND.3", "button1:2", "black",  [] ]
+  ],
   "serial": [
     {
       "type": "serial",

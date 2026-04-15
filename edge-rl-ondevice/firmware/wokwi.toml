@@ -2,6 +2,7 @@
 version = 1
 firmware = ".pio/build/edge-rl-node/firmware.bin"
 elf = ".pio/build/edge-rl-node/firmware.elf"
+gdbServerPort = 3333
 
 [wokwi.simulation]
 speed = "1MHz"
@@ -11,5 +12,5 @@ index = 0
 baud = 115200
 
 [[wokwi.network]]
-host = "localhost"
+host = "host.wokwi.internal"
 port = 1883

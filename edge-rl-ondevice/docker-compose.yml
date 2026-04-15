@@ -1,18 +1,19 @@
 services:
   mosquitto:
     image: eclipse-mosquitto:latest
-    container_name: mosquitto-broker
+    container_name: mosquitto-ondevice
     ports:
       - "1883:1883"
       - "9001:9001"
     volumes:
       - ../control-plane/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
     networks:
-      - wokwi-net
+      - edge-net
 
   traffic:
     build:
       context: ../control-plane
+    container_name: traffic-ondevice
     depends_on:
       - mosquitto
     environment:
@@ -27,8 +28,8 @@ services:
       - ../data:/app/data
     command: ["python", "-m", "control_plane.dataset_traffic_generator"]
     networks:
-      - wokwi-net
+      - edge-net
 
 networks:
-  wokwi-net:
+  edge-net:
     driver: bridge

@@ -1,19 +1,30 @@
 services:
+  broker:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto-oncloud
+    ports:
+      - "11883:1883"  # Different port to avoid conflict with on-device
+    command: mosquitto -c /mosquitto-no-auth.conf
+
   trainer:
     build:
-      context: ./control-plane
+      context: ../control-plane
+    container_name: trainer-oncloud
     environment:
-      MQTT_HOST: broker.hivemq.com
+      MQTT_HOST: broker
       MQTT_PORT: "1883"
       EDGE_NODE_IDS: "zone-a"
       LOG_LEVEL: INFO
+    depends_on:
+      - broker
     command: ["python", "-m", "control_plane.trainer"]
 
   traffic:
     build:
-      context: ./control-plane
+      context: ../control-plane
+    container_name: traffic-oncloud
     environment:
-      MQTT_HOST: broker.hivemq.com
+      MQTT_HOST: broker
       MQTT_PORT: "1883"
       EDGE_NODE_IDS: "zone-a"
       BURST_PERIOD_S: "30"
@@ -21,5 +32,7 @@ services:
       DATA_DIR: /app/data
       LOG_LEVEL: INFO
     volumes:
-      - ./data:/app/data
+      - ../data:/app/data
+    depends_on:
+      - broker
     command: ["python", "-m", "control_plane.dataset_traffic_generator"]

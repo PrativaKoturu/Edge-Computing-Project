@@ -1,8 +1,16 @@
 [wokwi]
 version = 1
-firmware = ".pio/build/esp32dev/firmware.bin"
-elf = ".pio/build/esp32dev/firmware.elf"
+firmware = ".pio/build/zone-a/firmware.bin"
+elf = ".pio/build/zone-a/firmware.elf"
+gdbServerPort = 3333
 
-# To build and simulate:
-# 1. pio run
-# 2. Press F1 → "Wokwi: Start Simulator"
+[wokwi.simulation]
+speed = "full"
+
+[[wokwi.uart]]
+index = 0
+baud = 115200
+
+[[wokwi.network]]
+host = "broker.hivemq.com"
+port = 1883
