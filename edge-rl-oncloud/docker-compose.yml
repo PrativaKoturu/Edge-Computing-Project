@@ -11,8 +11,11 @@ services:
       context: ../control-plane
     container_name: trainer-oncloud
     environment:
-      MQTT_HOST: broker
-      MQTT_PORT: "1883"
+      # Default: connect to local mosquitto service ("broker").
+      # For Wokwi/public-broker demos, run with:
+      #   MQTT_HOST=broker.hivemq.com MQTT_PORT=1883 docker compose up -d --build
+      MQTT_HOST: ${MQTT_HOST:-broker}
+      MQTT_PORT: ${MQTT_PORT:-1883}
       EDGE_NODE_IDS: "zone-a"
       LOG_LEVEL: INFO
     depends_on:
@@ -24,8 +27,8 @@ services:
       context: ../control-plane
     container_name: traffic-oncloud
     environment:
-      MQTT_HOST: broker
-      MQTT_PORT: "1883"
+      MQTT_HOST: ${MQTT_HOST:-broker}
+      MQTT_PORT: ${MQTT_PORT:-1883}
       EDGE_NODE_IDS: "zone-a"
       BURST_PERIOD_S: "30"
       BURST_SIZE: "20"
